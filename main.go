@@ -209,10 +209,6 @@ func init() {
 func main() {
 	flag.Parse()
 
-	if len(config.Secret) == 0 {
-		log.Fatalln("Secret word is required. Use -secret flag")
-	}
-
 	if _, err := os.Stat(config.Path); err != nil {
 		log.Fatalln(err.Error())
 	}
