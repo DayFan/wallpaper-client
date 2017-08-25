@@ -17,14 +17,20 @@ import (
 	"github.com/DayFan/wallpaper-client/wallpaper"
 )
 
-//Task is strucure of task
+type Config struct {
+	AddrHTTP string
+	AddrTCP  string
+	Secret   string
+	Path     string
+	Username string
+}
+
 type Task struct {
 	ImageName string
 	Path      string
 	Timeout   uint64
 }
 
-//Client is structure of interaction with wallpaper server
 type Client struct {
 	Conn  net.Conn
 	Type  string
@@ -119,7 +125,7 @@ func (client *Client) SendOK() error {
 //LoadImage function for loading images from http server and stored in task.Value
 func (client *Client) LoadImage(taskIndex int64) {
 	task := &client.Tasks[taskIndex]
-	url := strings.Join([]string{"http://localhost:5000", "static", "images", task.ImageName}, "/")
+	url := strings.Join([]string{config.AddrHTTP, "static", "images", task.ImageName}, "/")
 	resp, err := http.Get(url)
 
 	if err != nil {
@@ -127,7 +133,7 @@ func (client *Client) LoadImage(taskIndex int64) {
 	}
 	defer resp.Body.Close()
 
-	storePath := filepath.Join(path, task.ImageName)
+	storePath := filepath.Join(config.Path, task.ImageName)
 	file, err := os.Create(storePath)
 	if err != nil {
 		log.Fatalf("Create image error. %s\n", err.Error())
@@ -190,31 +196,28 @@ func (client *Client) StartTask() {
 	}
 }
 
-var host string
-var secret string
-var path string
-
-// var username string
+var config Config
 
 func init() {
-	flag.StringVar(&host, "addr", "localhost:8008", "Server address and host.")
-	// flag.StringVar(&username, "username", "", "Username on service")
-	flag.StringVar(&secret, "secret", "", "Secret word to connect to the server.")
-	flag.StringVar(&path, "path", os.TempDir(), "Path to directory where will be store downloaded images.")
+	flag.StringVar(&config.AddrTCP, "tcp", "localhost:8008", "Address to tcp server.")
+	flag.StringVar(&config.AddrHTTP, "http", "http://localhost:5000", "Address to http server.")
+	flag.StringVar(&config.Username, "user", "", "Username on service")
+	flag.StringVar(&config.Secret, "secret", "", "Secret word to connect to the server.")
+	flag.StringVar(&config.Path, "path", os.TempDir(), "Path to directory where will be store downloaded images.")
 }
 
 func main() {
 	flag.Parse()
 
-	if len(secret) == 0 {
+	if len(config.Secret) == 0 {
 		log.Fatalln("Secret word is required. Use -secret flag")
 	}
 
-	if _, err := os.Stat(path); err != nil {
+	if _, err := os.Stat(config.Path); err != nil {
 		log.Fatalln(err.Error())
 	}
 
-	conn, err := net.Dial("tcp", host)
+	conn, err := net.Dial("tcp", config.AddrTCP)
 	if err != nil {
 		log.Fatalf("Dial TCP failed. %s\n", err.Error())
 	}
@@ -223,7 +226,7 @@ func main() {
 
 	client := Client{Conn: conn, Stop: make(chan bool, 1)}
 
-	client.Auth(secret)
+	client.Auth(config.Secret)
 
 	for {
 		if err := client.GetTasks(); err != nil {
