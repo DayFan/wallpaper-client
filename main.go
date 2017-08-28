@@ -2,20 +2,29 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/DayFan/wallpaper-client/wallpaper"
 )
+
+type AuthError struct {
+	err         error
+	WrongSecret bool
+}
 
 type Config struct {
 	AddrHTTP string
@@ -23,6 +32,7 @@ type Config struct {
 	Secret   string
 	Path     string
 	Username string
+	Timeout  uint64
 }
 
 type Task struct {
@@ -32,50 +42,45 @@ type Task struct {
 }
 
 type Client struct {
-	Conn  net.Conn
-	Type  string
-	Value string
-	Tasks []Task
-	Stop  chan bool
+	Conn        net.Conn
+	Type        string
+	Value       string
+	Tasks       []Task
+	WrongSecret bool
+	Stop        chan bool
+	Mutex       sync.Mutex
 }
 
 //Auth function for authentication on server
-func (client *Client) Auth(secretString string) {
+func (client *Client) Auth(secretString string) AuthError {
 	secretBytes := []byte(secretString)
-	res := make([]byte, 2)
+	res := make([]byte, 5)
+	result := AuthError{}
 
-	_, err := client.Conn.Write(secretBytes)
-	if err != nil {
-		log.Fatalf("Connection problem when upon attempt send secret word. %s\n", err.Error())
+	_, result.err = client.Conn.Write(secretBytes)
+	if result.err != nil {
+		return result
 	}
 
-	_, err = client.Conn.Read(res)
-	if err != nil {
-		log.Fatalf("Error when upon attempt send secret word. %s\n", err.Error())
+	_, result.err = client.Conn.Read(res)
+	if bytes.Equal(res, []byte("Error")) {
+		result.err = errors.New("Wrong secret word")
+		result.WrongSecret = true
 	}
 
-	if !bytes.Equal(res, []byte("OK")) {
-		log.Fatalf("Authentication error. The response from server does not contain 'OK'\n")
-	}
-
-	log.Println("Authentication was successful")
+	return result
 }
 
 //GetTasks waiting for incoming tasks
 //task string is 'image_name:timeout;'
 func (client *Client) GetTasks() error {
-	var taskIndex int64
-	tasks := make([]byte, 0)
+	taskBytes := make([]byte, 0)
 	buf := make([]byte, 64)
 
 	readedBytes, err := client.Conn.Read(buf)
 
-	if len(client.Tasks) > 1 {
-		client.Stop <- true
-	}
-
 	for readedBytes <= 64 && readedBytes != 0 {
-		tasks = append(tasks, buf[:readedBytes]...)
+		taskBytes = append(taskBytes, buf[:readedBytes]...)
 
 		client.Conn.SetReadDeadline(time.Now().Add(time.Second * 2))
 		readedBytes, err = client.Conn.Read(buf)
@@ -89,8 +94,9 @@ func (client *Client) GetTasks() error {
 		}
 	}
 
-	client.Tasks = make([]Task, 0)
-	for _, t := range strings.Split(string(tasks), ";") {
+	stringOfTasks := strings.Split(string(taskBytes), ";")
+	tasks := make([]Task, len(stringOfTasks))
+	for index, t := range stringOfTasks {
 		tmp := strings.Split(t, ":")
 
 		if len(tmp) != 2 {
@@ -103,15 +109,19 @@ func (client *Client) GetTasks() error {
 			continue
 		}
 
-		client.Tasks = append(client.Tasks, Task{ImageName: tmp[0], Timeout: timeout})
-		go client.LoadImage(taskIndex)
-		taskIndex++
+		tasks[index] = Task{ImageName: tmp[0], Timeout: timeout}
+		go client.LoadImage(index)
 	}
 
 	err = client.SendOK()
 	if err != nil {
 		fmt.Println(err.Error())
 	}
+
+	client.Mutex.Lock()
+	client.Tasks = tasks
+	client.Stop <- true
+	client.Mutex.Unlock()
 
 	return nil
 }
@@ -123,7 +133,7 @@ func (client *Client) SendOK() error {
 }
 
 //LoadImage function for loading images from http server and stored in task.Value
-func (client *Client) LoadImage(taskIndex int64) {
+func (client *Client) LoadImage(taskIndex int) {
 	task := &client.Tasks[taskIndex]
 	url := strings.Join([]string{config.AddrHTTP, "static", "images", task.ImageName}, "/")
 	resp, err := http.Get(url)
@@ -151,59 +161,95 @@ func (client *Client) LoadImage(taskIndex int64) {
 
 //StartTasks function for looped tasks
 func (client *Client) StartTasks() {
-	var taskIndex int64
+	var taskIndex int
 	var timeout time.Duration
 
-	lastTaskIndex := int64(len(client.Tasks) - 1)
-	currentTask := client.Tasks[0]
-
 	for {
+		client.Mutex.Lock()
+		currentTask := client.Tasks[taskIndex]
+		client.Mutex.Unlock()
+
 		if currentTask.Path != "" {
 			if err := wallpaper.Set(currentTask.Path); err != nil {
 				log.Fatalf("Can't set a wallpaper. %s\n", err.Error())
+			} else if len(client.Tasks) == 1 {
+				timeout = math.MaxInt64
+			} else {
+				timeout = time.Second * time.Duration(currentTask.Timeout)
 			}
-
-			timeout = time.Second * time.Duration(currentTask.Timeout)
 		} else {
 			timeout = time.Millisecond * 100
 		}
 
-		if taskIndex == lastTaskIndex {
+		taskIndex++
+		if taskIndex == len(client.Tasks) {
 			taskIndex = 0
-		} else {
-			taskIndex++
 		}
-
-		currentTask = client.Tasks[taskIndex]
 
 		select {
 		case <-client.Stop:
 			log.Println("New task list received. Stop current list")
-			return
+			taskIndex = 0
 		case <-time.After(timeout):
 		}
 	}
 }
 
-//StartTask function for set on task
-func (client *Client) StartTask() {
-	for client.Tasks[0].Path == "" {
-		time.Sleep(time.Millisecond * 100)
+func (client *Client) CreateTasksFromLocalDir() {
+	if config.Path == os.TempDir() {
+		return
 	}
 
-	if err := wallpaper.Set(client.Tasks[0].Path); err != nil {
-		log.Fatalf("Can't set a wallpaper. %s\n", err.Error())
+	var filename string
+
+	files, _ := ioutil.ReadDir(config.Path)
+	for _, f := range files {
+		filename = f.Name()
+		if !f.IsDir() && strings.HasSuffix(filename, ".jpg") {
+			client.Tasks = append(client.Tasks, Task{ImageName: filename, Timeout: config.Timeout, Path: filepath.Join(config.Path, filename)})
+		}
 	}
+}
+
+func (client *Client) Connect() error {
+	var conn net.Conn
+	var err error
+	for {
+		conn, err = net.Dial("tcp", config.AddrTCP)
+		if err != nil {
+			log.Printf("Dial TCP failed. %s\n", err.Error())
+			select {
+			case <-time.After(time.Second * 30):
+			}
+		} else {
+			break
+		}
+	}
+
+	client.Conn = conn
+
+	if err := client.Auth(config.Secret); err.WrongSecret {
+		log.Printf("Authentication failed. %s\n", err.err.Error())
+		client.WrongSecret = err.WrongSecret
+		return err.err
+	}
+
+	log.Println("Authentication was successful")
+
+	return nil
 }
 
 var config Config
 
 func init() {
+	var defaultDir = os.TempDir()
+
 	flag.StringVar(&config.AddrTCP, "tcp", "localhost:8008", "Address to tcp server.")
 	flag.StringVar(&config.AddrHTTP, "http", "http://localhost:5000", "Address to http server.")
 	flag.StringVar(&config.Username, "user", "", "Username on service")
 	flag.StringVar(&config.Secret, "secret", "", "Secret word to connect to the server.")
-	flag.StringVar(&config.Path, "path", os.TempDir(), "Path to directory where will be store downloaded images.")
+	flag.StringVar(&config.Path, "path", defaultDir, "Path to directory where will be store downloaded images.")
+	flag.Uint64Var(&config.Timeout, "timeout", 30, "Only used in offline mode. Timeout in seconds for change wallpaper.")
 }
 
 func main() {
@@ -213,28 +259,23 @@ func main() {
 		log.Fatalln(err.Error())
 	}
 
-	conn, err := net.Dial("tcp", config.AddrTCP)
-	if err != nil {
-		log.Fatalf("Dial TCP failed. %s\n", err.Error())
-	}
-
-	defer conn.Close()
-
-	client := Client{Conn: conn, Stop: make(chan bool, 1)}
-
-	client.Auth(config.Secret)
+	client := Client{Stop: make(chan bool, 1), Mutex: sync.Mutex{}}
+	client.CreateTasksFromLocalDir()
+	go client.StartTasks()
 
 	for {
-		if err := client.GetTasks(); err != nil {
-			log.Fatalf("Get task failed. %s\n", err.Error())
-		}
+		if client.WrongSecret {
+			time.Sleep(time.Microsecond)
+		} else if client.Conn != nil {
+			if err := client.GetTasks(); err != nil {
+				log.Printf("Get task failed. %s\n", err.Error())
+			}
+		} else {
+			if err := client.Connect(); err != nil {
+				log.Printf("Connect failed. %s\n", err.Error())
+			}
 
-		switch len(client.Tasks) {
-		case 0:
-		case 1:
-			go client.StartTask()
-		default:
-			go client.StartTasks()
+			defer client.Conn.Close()
 		}
 	}
 }
