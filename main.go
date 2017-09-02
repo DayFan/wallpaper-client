@@ -163,46 +163,43 @@ func (client *Client) LoadImage(taskIndex int) {
 func (client *Client) StartTasks() {
 	var taskIndex int
 	var timeout time.Duration
-	var currentTask Task
 
 	for {
-		timeout = time.Millisecond * 100
-
 		client.Mutex.Lock()
-		if client.Tasks == nil || len(client.Tasks) <= 1 {
-			timeout = math.MaxInt64
-		} else {
-			currentTask = client.Tasks[taskIndex]
-		}
-		client.Mutex.Unlock()
 
-		if currentTask.Path != "" {
-			if err := wallpaper.Set(currentTask.Path); err != nil {
+		if len(client.Tasks) > 0 {
+			if err := wallpaper.Set(client.Tasks[taskIndex].Path); err != nil {
 				log.Printf("Can't set a wallpaper. %s\n", err.Error())
+				timeout = time.Millisecond * 100
 			} else {
-				timeout = time.Second * time.Duration(currentTask.Timeout)
+				timeout = time.Second * time.Duration(client.Tasks[taskIndex].Timeout)
 			}
+		} else {
+			timeout = math.MaxInt64
 		}
+
+		taskIndex++
+		if taskIndex == len(client.Tasks) {
+			taskIndex = 0
+		}
+
+		client.Mutex.Unlock()
 
 		select {
 		case <-client.Stop:
 			log.Println("New task list received. Stop current list")
 			taskIndex = 0
 		case <-time.After(timeout):
-			taskIndex++
-			if taskIndex == len(client.Tasks) {
-				taskIndex = 0
-			}
 		}
 	}
 }
 
 func (client *Client) CreateTasksFromLocalDir() {
+	var filename string
+
 	if config.Path == os.TempDir() {
 		return
 	}
-
-	var filename string
 
 	files, _ := ioutil.ReadDir(config.Path)
 	for _, f := range files {
@@ -255,14 +252,23 @@ func init() {
 }
 
 func main() {
+	var err error
+
 	flag.Parse()
 
-	if _, err := os.Stat(config.Path); err != nil {
+	if !filepath.IsAbs(config.Path) {
+		if config.Path, err = filepath.Abs(config.Path); err != nil {
+			log.Fatalln(err.Error())
+		}
+	}
+
+	if _, err = os.Stat(config.Path); err != nil {
 		log.Fatalln(err.Error())
 	}
 
 	client := Client{Stop: make(chan bool, 1), Mutex: sync.Mutex{}}
 	client.CreateTasksFromLocalDir()
+
 	go client.StartTasks()
 
 	for {
