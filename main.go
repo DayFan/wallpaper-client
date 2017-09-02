@@ -163,27 +163,25 @@ func (client *Client) LoadImage(taskIndex int) {
 func (client *Client) StartTasks() {
 	var taskIndex int
 	var timeout time.Duration
+	var currentTask Task
 
 	for {
+		timeout = time.Millisecond * 100
+
 		client.Mutex.Lock()
-		currentTask := client.Tasks[taskIndex]
+		if client.Tasks == nil || len(client.Tasks) <= 1 {
+			timeout = math.MaxInt64
+		} else {
+			currentTask = client.Tasks[taskIndex]
+		}
 		client.Mutex.Unlock()
 
 		if currentTask.Path != "" {
 			if err := wallpaper.Set(currentTask.Path); err != nil {
-				log.Fatalf("Can't set a wallpaper. %s\n", err.Error())
-			} else if len(client.Tasks) == 1 {
-				timeout = math.MaxInt64
+				log.Printf("Can't set a wallpaper. %s\n", err.Error())
 			} else {
 				timeout = time.Second * time.Duration(currentTask.Timeout)
 			}
-		} else {
-			timeout = time.Millisecond * 100
-		}
-
-		taskIndex++
-		if taskIndex == len(client.Tasks) {
-			taskIndex = 0
 		}
 
 		select {
@@ -191,6 +189,10 @@ func (client *Client) StartTasks() {
 			log.Println("New task list received. Stop current list")
 			taskIndex = 0
 		case <-time.After(timeout):
+			taskIndex++
+			if taskIndex == len(client.Tasks) {
+				taskIndex = 0
+			}
 		}
 	}
 }
