@@ -10,8 +10,7 @@ import (
 
 //Set is function for set wallpaper
 func Set(path string) error {
-	p := strings.Join([]string{"file://", path}, "")
-	// gsettings get org.gnome.desktop.background picture-uri
+	p := fmt.Sprintf("'%s'", strings.Join([]string{"file://", path}, ""))
 	cmd := exec.Command("gsettings", "set", "org.gnome.desktop.background", "picture-uri", p)
 	var out bytes.Buffer
 	cmd.Stdout = &out
