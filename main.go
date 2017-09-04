@@ -172,6 +172,7 @@ func (client *Client) StartTasks() {
 				log.Printf("Can't set a wallpaper. %s\n", err.Error())
 				timeout = time.Millisecond * 100
 			} else {
+				log.Println("Wallpaper was changed.")
 				timeout = time.Second * time.Duration(client.Tasks[taskIndex].Timeout)
 			}
 		} else {

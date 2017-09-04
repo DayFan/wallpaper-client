@@ -14,13 +14,13 @@ func Set(path string) error {
 	var mod = syscall.NewLazyDLL("user32.dll")
 	var proc = mod.NewProc("SystemParametersInfoW")
 
-	_, _, err := proc.Call(
+	ret, _, _ := proc.Call(
 		uintptr(SPI_SETDESKWALLPAPER),
 		0,
 		uintptr(unsafe.Pointer(syscall.StringToUTF16Ptr(path))),
 		uintptr(SPIF_UPDATEINIFILE))
 
-	log.Printf("Result message - %s", err.Error())
+	log.Printf("Result code - %d", uint(ret))
 
 	return nil
 }
