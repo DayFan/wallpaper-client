@@ -1,4 +1,4 @@
-package wallpaper
+package task
 
 import (
 	"fmt"
@@ -6,9 +6,8 @@ import (
 	"strings"
 )
 
-//Set is function for set wallpaper
-func Set(path string) error {
-	imagePath := fmt.Sprintf("'%s'", strings.Join([]string{"file://", path}, ""))
+func (t *Task) Set() error {
+	imagePath := fmt.Sprintf("'%s'", strings.Join([]string{"file://", t.Path}, ""))
 	cmd := exec.Command("gsettings", "set", "org.gnome.desktop.background", "picture-uri", imagePath)
 	err := cmd.Run()
 	return err
