@@ -23,13 +23,12 @@ type AuthError struct {
 }
 
 type Client struct {
-	Conn        net.Conn
-	Type        string
-	Value       string
-	Tasks       []task.Task
-	WrongSecret bool
-	Stop        chan bool
-	Mutex       sync.Mutex
+	Conn  net.Conn
+	Type  string
+	Value string
+	Tasks []task.Task
+	Stop  chan bool
+	Mutex sync.Mutex
 }
 
 //Auth function for authentication on server
@@ -123,9 +122,11 @@ func (client *Client) SendOK() error {
 }
 
 //StartTasks function for looped tasks
-func (client *Client) StartTasks() {
+func (client *Client) StartTasks(wg *sync.WaitGroup) {
 	var taskIndex int
 	var timeout time.Duration
+
+	defer wg.Done()
 
 	for {
 		client.Mutex.Lock()
@@ -174,29 +175,26 @@ func (client *Client) CreateTasksFromLocalDir(path string, timeout uint64) {
 	}
 }
 
-func (client *Client) Connect(addrTCP string, secret string) error {
-	var conn net.Conn
-	var err error
+func (client *Client) Connect(addrTCP string, secret string) (error, bool) {
+	// var conn net.Conn
+	// var e error
 
-	conn, err = net.Dial("tcp", addrTCP)
-	if err != nil {
-		return err
+	conn, e := net.Dial("tcp", addrTCP)
+	if e != nil {
+		return e, false
 	}
 
 	client.Conn = conn
 
-	errAuth := client.Auth(secret)
+	authError := client.Auth(secret)
 
-	if errAuth.err != nil {
-		if errAuth.WrongSecret {
-			client.WrongSecret = true
-		}
-
+	if authError.err != nil {
+		client.Conn.Close()
 		client.Conn = nil
-		return errAuth.err
+		return authError.err, authError.WrongSecret
 	}
 
 	log.Println("Authentication was successful")
 
-	return nil
+	return nil, false
 }

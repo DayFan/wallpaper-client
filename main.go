@@ -35,6 +35,7 @@ func init() {
 
 func main() {
 	var err error
+	var wg sync.WaitGroup
 
 	flag.Parse()
 
@@ -51,24 +52,33 @@ func main() {
 	client := client.Client{Stop: make(chan bool, 1), Mutex: sync.Mutex{}}
 	client.CreateTasksFromLocalDir(config.Path, config.Timeout)
 
-	go client.StartTasks()
+	wg.Add(1)
+	go client.StartTasks(&wg)
 
 	for {
-		if client.WrongSecret {
-			time.Sleep(time.Second)
-		} else if client.Conn != nil {
+		if client.Conn != nil {
 			if err := client.GetTasks(&config.AddrHTTP, &config.Path); err != nil {
 				log.Printf("Get task failed. Reason: %s\n", err.Error())
 				client.Conn.Close()
 				client.Conn = nil
 			}
 		} else {
-			if err := client.Connect(config.AddrTCP, config.Secret); err != nil {
+			err, wrongSecret := client.Connect(config.AddrTCP, config.Secret)
+			if err != nil {
 				log.Printf("Connect failed. Reason: %s\n", err.Error())
+
+				if wrongSecret {
+					break
+				}
+
 				time.Sleep(time.Second * 30)
-			} else {
-				defer client.Conn.Close()
 			}
 		}
+	}
+
+	if len(client.Tasks) > 0 {
+		wg.Wait()
+	} else {
+		log.Println("Task list is empty. Exit")
 	}
 }
