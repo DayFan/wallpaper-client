@@ -63,6 +63,8 @@ func (client *Client) Auth(secretString string) AuthError {
 //GetTasks waiting for incoming tasks
 //task string is 'image_name:timeout;'
 func (client *Client) GetTasks(addrHTTP *string, path *string) error {
+	var index uint
+
 	taskBytes := make([]byte, 0)
 	buf := make([]byte, 64)
 
@@ -85,11 +87,11 @@ func (client *Client) GetTasks(addrHTTP *string, path *string) error {
 
 	stringOfTasks := strings.Split(string(taskBytes), ";")
 	tasks := make([]task.Task, len(stringOfTasks))
-	for index, t := range stringOfTasks {
-		tmp := strings.Split(t, ":")
+	for _, str := range stringOfTasks {
+		tmp := strings.Split(str, ":")
 
 		if len(tmp) != 2 {
-			log.Printf("Not engouth arguments in string - (%s)\n", t)
+			log.Printf("Incorrect task format - (%s)\n", str)
 			continue
 		}
 
@@ -98,8 +100,11 @@ func (client *Client) GetTasks(addrHTTP *string, path *string) error {
 			continue
 		}
 
-		tasks[index] = task.Task{ImageName: tmp[0], Timeout: timeout}
+		tasks[index].ImageName = tmp[0]
+		tasks[index].Timeout = timeout
 		go tasks[index].LoadImage(addrHTTP, path)
+
+		index++
 	}
 
 	err = client.SendOK()
@@ -107,10 +112,12 @@ func (client *Client) GetTasks(addrHTTP *string, path *string) error {
 		return err
 	}
 
-	client.Mutex.Lock()
-	client.Tasks = tasks
-	client.Stop <- true
-	client.Mutex.Unlock()
+	if index > 0 {
+		client.Mutex.Lock()
+		client.Tasks = tasks[:index]
+		client.Stop <- true
+		client.Mutex.Unlock()
+	}
 
 	return nil
 }
