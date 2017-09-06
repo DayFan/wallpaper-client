@@ -55,17 +55,20 @@ func main() {
 
 	for {
 		if client.WrongSecret {
-			time.Sleep(time.Microsecond)
+			time.Sleep(time.Second)
 		} else if client.Conn != nil {
 			if err := client.GetTasks(&config.AddrHTTP, &config.Path); err != nil {
-				log.Printf("Get task failed. %s\n", err.Error())
+				log.Printf("Get task failed. Reason: %s\n", err.Error())
+				client.Conn.Close()
+				client.Conn = nil
 			}
 		} else {
 			if err := client.Connect(config.AddrTCP, config.Secret); err != nil {
-				log.Printf("Connect failed. %s\n", err.Error())
+				log.Printf("Connect failed. Reason: %s\n", err.Error())
+				time.Sleep(time.Second * 30)
+			} else {
+				defer client.Conn.Close()
 			}
-
-			defer client.Conn.Close()
 		}
 	}
 }

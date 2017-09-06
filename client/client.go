@@ -3,7 +3,6 @@ package client
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"math"
@@ -41,10 +40,19 @@ func (client *Client) Auth(secretString string) AuthError {
 
 	_, result.err = client.Conn.Write(secretBytes)
 	if result.err != nil {
+		client.Conn.Close()
+		client.Conn = nil
 		return result
 	}
 
 	_, result.err = client.Conn.Read(res)
+
+	if result.err != nil {
+		client.Conn.Close()
+		client.Conn = nil
+		return result
+	}
+
 	if bytes.Equal(res, []byte("Error")) {
 		result.err = errors.New("Wrong secret word")
 		result.WrongSecret = true
@@ -97,7 +105,7 @@ func (client *Client) GetTasks(addrHTTP *string, path *string) error {
 
 	err = client.SendOK()
 	if err != nil {
-		fmt.Println(err.Error())
+		return err
 	}
 
 	client.Mutex.Lock()
@@ -169,24 +177,22 @@ func (client *Client) CreateTasksFromLocalDir(path string, timeout uint64) {
 func (client *Client) Connect(addrTCP string, secret string) error {
 	var conn net.Conn
 	var err error
-	for {
-		conn, err = net.Dial("tcp", addrTCP)
-		if err != nil {
-			log.Printf("Dial TCP failed. %s\n", err.Error())
-			select {
-			case <-time.After(time.Second * 30):
-			}
-		} else {
-			break
-		}
+
+	conn, err = net.Dial("tcp", addrTCP)
+	if err != nil {
+		return err
 	}
 
 	client.Conn = conn
 
 	errAuth := client.Auth(secret)
-	if errAuth.WrongSecret {
-		log.Printf("Authentication failed. %s\n", errAuth.err.Error())
-		client.WrongSecret = errAuth.WrongSecret
+
+	if errAuth.err != nil {
+		if errAuth.WrongSecret {
+			client.WrongSecret = true
+		}
+
+		client.Conn = nil
 		return errAuth.err
 	}
 
