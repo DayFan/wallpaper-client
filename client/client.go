@@ -1,8 +1,8 @@
 package client
 
 import (
-	"bytes"
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"math"
@@ -34,27 +34,28 @@ type Client struct {
 //Auth function for authentication on server
 func (client *Client) Auth(secretString string) AuthError {
 	secretBytes := []byte(secretString)
-	res := make([]byte, 5)
+	res := make([]byte, 2)
 	result := AuthError{}
 
 	_, result.err = client.Conn.Write(secretBytes)
 	if result.err != nil {
-		client.Conn.Close()
-		client.Conn = nil
 		return result
 	}
 
 	_, result.err = client.Conn.Read(res)
 
 	if result.err != nil {
-		client.Conn.Close()
-		client.Conn = nil
 		return result
 	}
 
-	if bytes.Equal(res, []byte("Error")) {
+	switch string(res) {
+	case "NO":
 		result.err = errors.New("Wrong secret word")
 		result.WrongSecret = true
+	case "OK":
+		log.Println("Authentication was successful")
+	default:
+		result.err = fmt.Errorf("Unidentified response from the server to the secret word. Response: '%s'", res)
 	}
 
 	return result
@@ -139,7 +140,9 @@ func (client *Client) StartTasks(wg *sync.WaitGroup) {
 		client.Mutex.Lock()
 
 		if len(client.Tasks) > 0 {
-			if err := client.Tasks[taskIndex].Set(); err != nil {
+			if client.Tasks[taskIndex].Path == "" {
+				timeout = time.Millisecond * 100
+			} else if err := client.Tasks[taskIndex].Set(); err != nil {
 				log.Printf("Can't set a wallpaper. %s\n", err.Error())
 				timeout = time.Millisecond * 100
 			} else {
@@ -183,25 +186,18 @@ func (client *Client) CreateTasksFromLocalDir(path string, timeout uint64) {
 }
 
 func (client *Client) Connect(addrTCP string, secret string) (error, bool) {
-	// var conn net.Conn
-	// var e error
-
-	conn, e := net.Dial("tcp", addrTCP)
-	if e != nil {
-		return e, false
+	conn, err := net.Dial("tcp", addrTCP)
+	if err != nil {
+		return err, false
 	}
 
 	client.Conn = conn
 
-	authError := client.Auth(secret)
-
-	if authError.err != nil {
+	if authError := client.Auth(secret); authError.err != nil {
 		client.Conn.Close()
 		client.Conn = nil
 		return authError.err, authError.WrongSecret
 	}
-
-	log.Println("Authentication was successful")
 
 	return nil, false
 }
